@@ -50,21 +50,20 @@ selected_sector = st.sidebar.selectbox(
     ["すべて", "Technology", "Healthcare", "Financial Services", "Consumer Defensive", "Energy", "Industrials", "Communication Services", "Consumer Cyclical", "Utilities", "Real Estate", "Basic Materials"]
 )
 
-# ★追加：強力な3つの指標をスライダー等で追加
 min_market_cap = st.sidebar.selectbox(
     "最低時価総額 (危険な小規模株の除外)",
     ["指定なし", "3億ドル以上 (小型株以上)", "20億ドル以上 (中型株以上)", "100億ドル以上 (大型株のみ)"]
 )
 max_pbr = st.sidebar.slider("PBRの上限 (倍)", 0.1, 10.0, 5.0, 0.1)
-max_per = st.sidebar.slider("PERの上限 (倍)", 1.0, 100.0, 50.0, 1.0) # ★追加
-min_roe = st.sidebar.slider("ROEの下限 (%)", -20.0, 50.0, 0.0, 1.0) # ★追加
+max_per = st.sidebar.slider("PERの上限 (倍)", 1.0, 100.0, 50.0, 1.0) 
+min_roe = st.sidebar.slider("ROEの下限 (%)", -20.0, 50.0, 0.0, 1.0) 
 min_dividend = st.sidebar.slider("配当利回りの下限 (%)", 0.0, 10.0, 0.0, 0.1)
 
 st.sidebar.write("---")
 st.sidebar.header("並び替え")
 sort_option = st.sidebar.selectbox(
     "リストの表示順", 
-    ["デフォルト", "配当利回りが高い順", "PBRが低い順", "PERが低い順", "ROEが高い順"] # 並び替えも追加
+    ["デフォルト", "配当利回りが高い順", "PBRが低い順", "PERが低い順", "ROEが高い順"] 
 )
 
 @st.cache_data(ttl=86400)
@@ -83,7 +82,8 @@ def get_sp500_tickers():
 @st.cache_data(ttl=86400)
 def get_all_us_tickers():
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        # ★修正：SECの厳しい基準に合わせたUser-Agent（アプリ名と連絡先）を設定
+        headers = {'User-Agent': 'PersonalStockScreener App (test@example.com)'}
         url = "https://www.sec.gov/files/company_tickers.json"
         response = requests.get(url, headers=headers)
         data = response.json()
@@ -110,13 +110,12 @@ def fetch_data(ticker_list):
             sector = info.get("sector", "Unknown")
             pbr = info.get("priceToBook") or 0
             
-            # ★新規取得：PER、ROE、時価総額
             per = info.get("trailingPE") or 0
             roe = info.get("returnOnEquity") or 0
             market_cap = info.get("marketCap") or 0
             
             if roe is not None:
-                roe = roe * 100 # %に直す
+                roe = roe * 100 
             
             dividend_yield = 0
             div_rate = info.get("dividendRate")
@@ -145,10 +144,10 @@ def fetch_data(ticker_list):
                 "Ticker": ticker,
                 "Name": info.get("shortName", ticker),
                 "Sector": sector,
-                "Market Cap": market_cap, # 追加
+                "Market Cap": market_cap, 
                 "PBR": pbr,
-                "PER": per, # 追加
-                "ROE (%)": roe, # 追加
+                "PER": per, 
+                "ROE (%)": roe, 
                 "Dividend Yield (%)": dividend_yield,
                 "Current Price": price,
                 "Target Price": target_price,
@@ -168,8 +167,6 @@ df = fetch_data(tickers)
 if df.empty:
     st.error("⚠️ データの取得に失敗しました。時間をおいてから左側の「🔄 最新データを再取得」ボタンを押してください。")
 else:
-    # --- ★新規追加したフィルターで絞り込み ---
-    # 時価総額の足切り
     cap_limit = 0
     if min_market_cap == "3億ドル以上 (小型株以上)": cap_limit = 300000000
     elif min_market_cap == "20億ドル以上 (中型株以上)": cap_limit = 2000000000
@@ -178,7 +175,7 @@ else:
     filtered_df = df[
         (df["Market Cap"] >= cap_limit) &
         (df["PBR"] > 0) & (df["PBR"] <= max_pbr) & 
-        (df["PER"] > 0) & (df["PER"] <= max_per) & # 赤字(PER 0以下)を除外し、上限で切る
+        (df["PER"] > 0) & (df["PER"] <= max_per) & 
         (df["ROE (%)"] >= min_roe) &
         (df["Dividend Yield (%)"] >= min_dividend)
     ]
@@ -192,7 +189,6 @@ else:
             filtered_df["Name"].str.contains(search_query, case=False, na=False)
         ]
 
-    # ソート処理
     if sort_option == "配当利回りが高い順":
         filtered_df = filtered_df.sort_values(by="Dividend Yield (%)", ascending=False)
     elif sort_option == "PBRが低い順":
@@ -217,12 +213,10 @@ else:
     if len(filtered_df) > 0:
         for index, row in filtered_df.iterrows():
             ticker = row["Ticker"]
-            # ★ 見出しにPERとROEを追加
             with st.expander(f"【{ticker}】 {row['Name']} (PBR: {row['PBR']:.2f} / PER: {row['PER']:.2f} / ROE: {row['ROE (%)']:.1f}% / 配当: {row['Dividend Yield (%)']:.2f}%)"):
                 col1, col2 = st.columns([1, 2])
                 with col1:
                     st.write(f"**セクター:** {row['Sector']}")
-                    # 時価総額を見やすく変換（Billion = 10億）
                     market_cap_b = row['Market Cap'] / 1000000000
                     st.write(f"**時価総額:** 約 {market_cap_b:.1f} 億ドル")
                     st.write(f"**PBR:** {row['PBR']:.2f} 倍")
