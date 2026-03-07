@@ -21,7 +21,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="米国株スクリーナー", layout="wide")
-st.title("📈 米国株 割安・高配当スクリーナー")
+st.title("📈 米国株 割安・高配当スクリーナー (Pro版)")
 
 st.sidebar.header("データ更新")
 if st.sidebar.button("🔄 最新データを再取得 (リセット)"):
@@ -30,7 +30,7 @@ if st.sidebar.button("🔄 最新データを再取得 (リセット)"):
 
 st.sidebar.write("---")
 st.sidebar.header("🔍 銘柄の直接検索")
-search_query = st.sidebar.text_input("ティッカーまたは企業名を入力 (例: AAPL)")
+search_query = st.sidebar.text_input("ティッカーまたは企業名を入力 (例: NVDA)")
 
 st.sidebar.write("---")
 st.sidebar.header("🌐 検索対象の市場")
@@ -82,7 +82,6 @@ def get_sp500_tickers():
 @st.cache_data(ttl=86400)
 def get_all_us_tickers():
     try:
-        # ★修正：SECの厳しい基準に合わせたUser-Agent（アプリ名と連絡先）を設定
         headers = {'User-Agent': 'PersonalStockScreener App (test@example.com)'}
         url = "https://www.sec.gov/files/company_tickers.json"
         response = requests.get(url, headers=headers)
@@ -100,6 +99,17 @@ else:
     st.warning("⚠️ **米国全市場（約8,000社）** を対象に検索しています。初回のデータ取得には **約1時間〜1時間半** かかります。PCをスリープさせずにそのままお待ちください☕")
     tickers = get_all_us_tickers()
 
+# ★★★ 最強の防弾シールド関数 ★★★
+# どんな異常なデータ（文字、辞書、空っぽ等）が来ても、必ず数字（float）に変換してクラッシュを防ぐ
+def safe_float(val):
+    try:
+        if val is None: return 0.0
+        if isinstance(val, dict): return 0.0 
+        return float(val)
+    except Exception:
+        return 0.0
+# ★★★★★★★★★★★★★★★★★★★★★
+
 @st.cache_data(ttl=3600, show_spinner="米国株のデータを全力で取得中です...（気長にお待ちください☕）")
 def fetch_data(ticker_list):
     data = []
@@ -108,46 +118,46 @@ def fetch_data(ticker_list):
         try:
             info = stock.info 
             sector = info.get("sector", "Unknown")
-            pbr = info.get("priceToBook") or 0
+            industry = info.get("industry", "Unknown") # 追加：同業他社を探すための「業種」
             
-            per = info.get("trailingPE") or 0
-            roe = info.get("returnOnEquity") or 0
-            market_cap = info.get("marketCap") or 0
+            # safe_floatを通すことで絶対にエラー落ちしなくなります
+            pbr = safe_float(info.get("priceToBook"))
+            per = safe_float(info.get("trailingPE"))
+            roe = safe_float(info.get("returnOnEquity")) * 100 
+            eps_growth = safe_float(info.get("earningsGrowth")) * 100 # 追加：EPS成長率
+            market_cap = safe_float(info.get("marketCap"))
             
-            if roe is not None:
-                roe = roe * 100 
+            div_rate = safe_float(info.get("dividendRate"))
+            price = safe_float(info.get("currentPrice") or info.get("previousClose"))
             
-            dividend_yield = 0
-            div_rate = info.get("dividendRate")
-            price = info.get("currentPrice") or info.get("previousClose") or 0
-            
-            if div_rate and price > 0:
+            dividend_yield = 0.0
+            if div_rate > 0 and price > 0:
                 dividend_yield = (div_rate / price) * 100
             else:
-                dy = info.get("dividendYield") or 0
+                dy = safe_float(info.get("dividendYield"))
                 if dy > 0:
-                    if dy < 0.2:
-                        dividend_yield = dy * 100
-                    else:
-                        dividend_yield = dy
+                    dividend_yield = dy * 100 if dy < 0.2 else dy
+
             if dividend_yield > 20.0:
                 dividend_yield = dividend_yield / 100
                 
-            target_price = info.get("targetMeanPrice") or 0
-            upside = 0
+            target_price = safe_float(info.get("targetMeanPrice"))
+            upside = 0.0
             if price > 0 and target_price > 0:
                 upside = ((target_price / price) - 1) * 100
                 
-            revenue_growth = info.get("revenueGrowth") or 0
+            revenue_growth = safe_float(info.get("revenueGrowth"))
             
             data.append({
                 "Ticker": ticker,
                 "Name": info.get("shortName", ticker),
                 "Sector": sector,
+                "Industry": industry, # 追加
                 "Market Cap": market_cap, 
                 "PBR": pbr,
                 "PER": per, 
                 "ROE (%)": roe, 
+                "EPS Growth (%)": eps_growth, # 追加
                 "Dividend Yield (%)": dividend_yield,
                 "Current Price": price,
                 "Target Price": target_price,
@@ -204,7 +214,7 @@ else:
     st.sidebar.download_button(
         label="📥 表示中のリストをCSVで保存",
         data=csv,
-        file_name='screener_results_v9.csv',
+        file_name='screener_results_v10.csv',
         mime='text/csv',
     )
 
@@ -213,15 +223,15 @@ else:
     if len(filtered_df) > 0:
         for index, row in filtered_df.iterrows():
             ticker = row["Ticker"]
-            with st.expander(f"【{ticker}】 {row['Name']} (PBR: {row['PBR']:.2f} / PER: {row['PER']:.2f} / ROE: {row['ROE (%)']:.1f}% / 配当: {row['Dividend Yield (%)']:.2f}%)"):
+            with st.expander(f"【{ticker}】 {row['Name']} (PBR: {row['PBR']:.2f} / PER: {row['PER']:.2f} / ROE: {row['ROE (%)']:.1f}%)"):
+                
+                # --- 基本情報エリア ---
                 col1, col2 = st.columns([1, 2])
                 with col1:
-                    st.write(f"**セクター:** {row['Sector']}")
+                    st.write(f"**セクター:** {row['Sector']} ({row['Industry']})")
                     market_cap_b = row['Market Cap'] / 1000000000
-                    st.write(f"**時価総額:** 約 {market_cap_b:.1f} 億ドル")
-                    st.write(f"**PBR:** {row['PBR']:.2f} 倍")
-                    st.write(f"**PER:** {row['PER']:.2f} 倍")
-                    st.write(f"**ROE:** {row['ROE (%)']:.1f} %")
+                    st.write(f"**時価総額:** 約 ${market_cap_b:.1f}B")
+                    st.write(f"**EPS成長率:** {row['EPS Growth (%)']:.1f} %")
                     st.write(f"**配当利回り:** {row['Dividend Yield (%)']:.2f} %")
                     
                     st.write("---") 
@@ -235,6 +245,7 @@ else:
                     
                     tv_url = f"https://jp.tradingview.com/chart/?symbol={ticker}"
                     st.markdown(f"[TradingViewでチャートを開く]({tv_url})", unsafe_allow_html=True)
+                
                 with col2:
                     stock = yf.Ticker(ticker)
                     financials = stock.financials
@@ -277,5 +288,35 @@ else:
                             st.write("グラフ化に失敗しました。")
                     else:
                         st.write("業績データなし")
+                
+                # --- ★追加：Bloomberg風 競合他社比較エリア ---
+                st.write("---")
+                st.markdown("#### 📊 競合他社（ピア）比較分析")
+                
+                # 同じ業種（Industry）の銘柄を探して時価総額順に並べる
+                industry = row['Industry']
+                if industry != "Unknown":
+                    peers = df[(df['Industry'] == industry) & (df['Ticker'] != ticker)]
+                    top_peers = peers.sort_values(by='Market Cap', ascending=False).head(4) # ライバル上位4社を抽出
+                    
+                    if not top_peers.empty:
+                        # 自分とライバルを合体させる
+                        comp_stocks = pd.concat([pd.DataFrame([row]), top_peers])
+                        
+                        # 表示用に綺麗に整形
+                        comp_df = comp_stocks[['Ticker', 'Name', 'PER', 'ROE (%)', 'EPS Growth (%)', 'Market Cap']].copy()
+                        comp_df['Market Cap'] = (comp_df['Market Cap'] / 1000000000).apply(lambda x: f"${x:.1f}B")
+                        comp_df['PER'] = comp_df['PER'].apply(lambda x: f"{x:.1f} 倍")
+                        comp_df['ROE (%)'] = comp_df['ROE (%)'].apply(lambda x: f"{x:.1f} %")
+                        comp_df['EPS Growth (%)'] = comp_df['EPS Growth (%)'].apply(lambda x: f"{x:.1f} %")
+                        
+                        # テーブルとして美しく表示
+                        st.dataframe(comp_df, hide_index=True, use_container_width=True)
+                    else:
+                        st.write("※比較可能な同じ業種のデータがありません。")
+                else:
+                    st.write("※業種データが取得できないため比較できません。")
+
     else:
         st.write("条件に一致する銘柄がありません。")
+
