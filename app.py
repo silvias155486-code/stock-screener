@@ -118,7 +118,6 @@ def fetch_data(ticker_list):
             sector = info.get("sector", "Unknown")
             industry = info.get("industry", "Unknown")
             
-            # ★新規取得：事業内容（長文）
             business_summary = info.get("longBusinessSummary", "事業内容のデータがありません。")
             
             pbr = safe_float(info.get("priceToBook"))
@@ -153,7 +152,7 @@ def fetch_data(ticker_list):
                 "Name": info.get("shortName", ticker),
                 "Sector": sector,
                 "Industry": industry,
-                "Business Summary": business_summary, # 追加
+                "Business Summary": business_summary, 
                 "Market Cap": market_cap, 
                 "PBR": pbr,
                 "PER": per, 
@@ -225,7 +224,6 @@ else:
             ticker = row["Ticker"]
             with st.expander(f"【{ticker}】 {row['Name']} (PBR: {row['PBR']:.2f} / PER: {row['PER']:.2f} / ROE: {row['ROE (%)']:.1f}%)"):
                 
-                # ★追加：スッキリ見せるためのタブ機能
                 tab1, tab2, tab3 = st.tabs(["📊 指標・業績・比較", "🏢 事業内容", "📰 最新ニュース"])
                 
                 # --- タブ1：従来の指標と業績グラフ ---
@@ -300,7 +298,7 @@ else:
                         peers = df[(df['Industry'] == industry) & (df['Ticker'] != ticker)]
                         top_peers = peers.sort_values(by='Market Cap', ascending=False).head(4) 
                         
-                        if not top_まずは、今の長旅が無事にゴールすることを祈っております！結果が本当peers.empty:
+                        if not top_peers.empty:
                             comp_stocks = pd.concat([pd.DataFrame([row]), top_peers])
                             comp_df = comp_stocks[['Ticker', 'Name', 'PER', 'ROE (%)', 'EPS Growth (%)', 'Market Cap']].copy()
                             comp_df['Market Cap'] = (comp_df['Market Cap'] / 1000000000).apply(lambda x: f"${x:.1f}B")
@@ -325,16 +323,14 @@ else:
                     try:
                         news_list = stock.news
                         if news_list and len(news_list) > 0:
-                            for n in news_list[:5]: # 最新の5件を表示
+                            for n in news_list[:5]: 
                                 title = n.get('title', 'No Title')
                                 link = n.get('link', '#')
                                 publisher = n.get('publisher', 'Unknown')
                                 pub_time = n.get('providerPublishTime', 0)
                                 
-                                # UNIXタイムを日時に変換
                                 date_str = pd.to_datetime(pub_time, unit='s').strftime('%Y-%m-%d %H:%M') if pub_time else "Unknown Date"
                                 
-                                # リンク付きのタイトルと詳細を表示
                                 st.markdown(f"**[{title}]({link})**")
                                 st.caption(f"配信元: {publisher} | 日時: {date_str}")
                                 st.write("---")
