@@ -213,7 +213,7 @@ else:
     st.sidebar.download_button(
         label="📥 表示中のリストをCSVで保存",
         data=csv,
-        file_name='screener_results_v11.csv',
+        file_name='screener_results_v12.csv',
         mime='text/csv',
     )
 
@@ -324,12 +324,32 @@ else:
                         news_list = stock.news
                         if news_list and len(news_list) > 0:
                             for n in news_list[:5]: 
-                                title = n.get('title', 'No Title')
-                                link = n.get('link', '#')
-                                publisher = n.get('publisher', 'Unknown')
-                                pub_time = n.get('providerPublishTime', 0)
+                                # ★修正ポイント：Yahoo Financeの仕様変更に対応した最新のデータ抽出
+                                content = n.get('content', {})
+                                title = n.get('title') or content.get('title', 'No Title')
                                 
-                                date_str = pd.to_datetime(pub_time, unit='s').strftime('%Y-%m-%d %H:%M') if pub_time else "Unknown Date"
+                                link = n.get('link')
+                                if not link and 'canonicalUrl' in content:
+                                    link = content['canonicalUrl'].get('url', '#')
+                                if not link:
+                                    link = '#'
+                                    
+                                publisher = n.get('publisher')
+                                if not publisher and 'provider' in content:
+                                    publisher = content['provider'].get('displayName', 'Unknown')
+                                if not publisher:
+                                    publisher = 'Unknown'
+                                    
+                                pub_time = n.get('providerPublishTime') or content.get('pubDate', 0)
+                                date_str = "Unknown Date"
+                                try:
+                                    if pub_time:
+                                        if isinstance(pub_time, (int, float)):
+                                            date_str = pd.to_datetime(pub_time, unit='s').strftime('%Y-%m-%d %H:%M')
+                                        else:
+                                            date_str = pd.to_datetime(pub_time).strftime('%Y-%m-%d %H:%M')
+                                except Exception:
+                                    pass
                                 
                                 st.markdown(f"**[{title}]({link})**")
                                 st.caption(f"配信元: {publisher} | 日時: {date_str}")
