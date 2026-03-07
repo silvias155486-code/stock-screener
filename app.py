@@ -3,6 +3,7 @@ import shutil
 import certifi
 import time
 import requests
+from datetime import datetime
 
 # --- 日本語パスによる通信エラーを回避する魔法のコード ---
 safe_cert_path = os.path.join(os.getcwd(), "cacert.pem")
@@ -99,8 +100,6 @@ else:
     st.warning("⚠️ **米国全市場（約8,000社）** を対象に検索しています。初回のデータ取得には **約1時間〜1時間半** かかります。PCをスリープさせずにそのままお待ちください☕")
     tickers = get_all_us_tickers()
 
-# ★★★ 最強の防弾シールド関数 ★★★
-# どんな異常なデータ（文字、辞書、空っぽ等）が来ても、必ず数字（float）に変換してクラッシュを防ぐ
 def safe_float(val):
     try:
         if val is None: return 0.0
@@ -108,7 +107,6 @@ def safe_float(val):
         return float(val)
     except Exception:
         return 0.0
-# ★★★★★★★★★★★★★★★★★★★★★
 
 @st.cache_data(ttl=3600, show_spinner="米国株のデータを全力で取得中です...（気長にお待ちください☕）")
 def fetch_data(ticker_list):
@@ -118,13 +116,15 @@ def fetch_data(ticker_list):
         try:
             info = stock.info 
             sector = info.get("sector", "Unknown")
-            industry = info.get("industry", "Unknown") # 追加：同業他社を探すための「業種」
+            industry = info.get("industry", "Unknown")
             
-            # safe_floatを通すことで絶対にエラー落ちしなくなります
+            # ★新規取得：事業内容（長文）
+            business_summary = info.get("longBusinessSummary", "事業内容のデータがありません。")
+            
             pbr = safe_float(info.get("priceToBook"))
             per = safe_float(info.get("trailingPE"))
             roe = safe_float(info.get("returnOnEquity")) * 100 
-            eps_growth = safe_float(info.get("earningsGrowth")) * 100 # 追加：EPS成長率
+            eps_growth = safe_float(info.get("earningsGrowth")) * 100 
             market_cap = safe_float(info.get("marketCap"))
             
             div_rate = safe_float(info.get("dividendRate"))
@@ -152,12 +152,13 @@ def fetch_data(ticker_list):
                 "Ticker": ticker,
                 "Name": info.get("shortName", ticker),
                 "Sector": sector,
-                "Industry": industry, # 追加
+                "Industry": industry,
+                "Business Summary": business_summary, # 追加
                 "Market Cap": market_cap, 
                 "PBR": pbr,
                 "PER": per, 
                 "ROE (%)": roe, 
-                "EPS Growth (%)": eps_growth, # 追加
+                "EPS Growth (%)": eps_growth, 
                 "Dividend Yield (%)": dividend_yield,
                 "Current Price": price,
                 "Target Price": target_price,
@@ -171,7 +172,6 @@ def fetch_data(ticker_list):
             
     return pd.DataFrame(data)
 
-# データの取得
 df = fetch_data(tickers)
 
 if df.empty:
@@ -214,7 +214,7 @@ else:
     st.sidebar.download_button(
         label="📥 表示中のリストをCSVで保存",
         data=csv,
-        file_name='screener_results_v10.csv',
+        file_name='screener_results_v11.csv',
         mime='text/csv',
     )
 
@@ -225,98 +225,123 @@ else:
             ticker = row["Ticker"]
             with st.expander(f"【{ticker}】 {row['Name']} (PBR: {row['PBR']:.2f} / PER: {row['PER']:.2f} / ROE: {row['ROE (%)']:.1f}%)"):
                 
-                # --- 基本情報エリア ---
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.write(f"**セクター:** {row['Sector']} ({row['Industry']})")
-                    market_cap_b = row['Market Cap'] / 1000000000
-                    st.write(f"**時価総額:** 約 ${market_cap_b:.1f}B")
-                    st.write(f"**EPS成長率:** {row['EPS Growth (%)']:.1f} %")
-                    st.write(f"**配当利回り:** {row['Dividend Yield (%)']:.2f} %")
-                    
-                    st.write("---") 
-                    st.write(f"**現在の株価:** ${row['Current Price']:.2f}")
-                    if row['Target Price'] > 0:
-                        color = "#00FF00" if row['Upside (%)'] >= 0 else "#FF4B4B"
-                        st.markdown(f"**平均目標株価:** ${row['Target Price']:.2f} (<span style='color:{color}; font-weight:bold;'>予想上値余地: {row['Upside (%)']:.1f}%</span>)", unsafe_allow_html=True)
-                    else:
-                        st.write("**平均目標株価:** データなし")
-                    st.write("---")
-                    
-                    tv_url = f"https://jp.tradingview.com/chart/?symbol={ticker}"
-                    st.markdown(f"[TradingViewでチャートを開く]({tv_url})", unsafe_allow_html=True)
+                # ★追加：スッキリ見せるためのタブ機能
+                tab1, tab2, tab3 = st.tabs(["📊 指標・業績・比較", "🏢 事業内容", "📰 最新ニュース"])
                 
-                with col2:
-                    stock = yf.Ticker(ticker)
-                    financials = stock.financials
-                    if not financials.empty:
-                        try:
-                            fin_df = financials.T
-                            revenue = fin_df['Total Revenue'] / 1000000 if 'Total Revenue' in fin_df else None
-                            net_income = fin_df['Net Income'] / 1000000 if 'Net Income' in fin_df else None
-                            years = [str(date.year) for date in fin_df.index]
-                            
-                            years = years[::-1]
-                            if revenue is not None: revenue = revenue[::-1]
-                            if net_income is not None: net_income = net_income[::-1]
-                            
-                            fig = go.Figure()
-                            if revenue is not None:
-                                fig.add_trace(go.Bar(x=years, y=revenue, name='実績: 売上高', marker_color='#1f77b4'))
-                            if net_income is not None:
-                                fig.add_trace(go.Bar(x=years, y=net_income, name='実績: 純利益', marker_color='#ff7f0e'))
-                            
-                            rev_growth = row['Revenue Growth']
-                            if revenue is not None and len(revenue) > 0 and rev_growth != 0:
-                                latest_rev = revenue.iloc[-1]
-                                proj_rev = latest_rev * (1 + rev_growth)
-                                next_year = str(int(years[-1]) + 1) + " (予想)"
+                # --- タブ1：従来の指標と業績グラフ ---
+                with tab1:
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        st.write(f"**セクター:** {row['Sector']} ({row['Industry']})")
+                        market_cap_b = row['Market Cap'] / 1000000000
+                        st.write(f"**時価総額:** 約 ${market_cap_b:.1f}B")
+                        st.write(f"**EPS成長率:** {row['EPS Growth (%)']:.1f} %")
+                        st.write(f"**配当利回り:** {row['Dividend Yield (%)']:.2f} %")
+                        
+                        st.write("---") 
+                        st.write(f"**現在の株価:** ${row['Current Price']:.2f}")
+                        if row['Target Price'] > 0:
+                            color = "#00FF00" if row['Upside (%)'] >= 0 else "#FF4B4B"
+                            st.markdown(f"**平均目標株価:** ${row['Target Price']:.2f} (<span style='color:{color}; font-weight:bold;'>予想上値余地: {row['Upside (%)']:.1f}%</span>)", unsafe_allow_html=True)
+                        else:
+                            st.write("**平均目標株価:** データなし")
+                        st.write("---")
+                        
+                        tv_url = f"https://jp.tradingview.com/chart/?symbol={ticker}"
+                        st.markdown(f"[TradingViewでチャートを開く]({tv_url})", unsafe_allow_html=True)
+                    
+                    with col2:
+                        stock = yf.Ticker(ticker)
+                        financials = stock.financials
+                        if not financials.empty:
+                            try:
+                                fin_df = financials.T
+                                revenue = fin_df['Total Revenue'] / 1000000 if 'Total Revenue' in fin_df else None
+                                net_income = fin_df['Net Income'] / 1000000 if 'Net Income' in fin_df else None
+                                years = [str(date.year) for date in fin_df.index]
                                 
-                                fig.add_trace(go.Bar(
-                                    x=[next_year], 
-                                    y=[proj_rev], 
-                                    name='予想: 売上高', 
-                                    marker_color='#add8e6', 
-                                    marker_pattern_shape="/" 
-                                ))
+                                years = years[::-1]
+                                if revenue is not None: revenue = revenue[::-1]
+                                if net_income is not None: net_income = net_income[::-1]
+                                
+                                fig = go.Figure()
+                                if revenue is not None:
+                                    fig.add_trace(go.Bar(x=years, y=revenue, name='実績: 売上高', marker_color='#1f77b4'))
+                                if net_income is not None:
+                                    fig.add_trace(go.Bar(x=years, y=net_income, name='実績: 純利益', marker_color='#ff7f0e'))
+                                
+                                rev_growth = row['Revenue Growth']
+                                if revenue is not None and len(revenue) > 0 and rev_growth != 0:
+                                    latest_rev = revenue.iloc[-1]
+                                    proj_rev = latest_rev * (1 + rev_growth)
+                                    next_year = str(int(years[-1]) + 1) + " (予想)"
+                                    
+                                    fig.add_trace(go.Bar(
+                                        x=[next_year], 
+                                        y=[proj_rev], 
+                                        name='予想: 売上高', 
+                                        marker_color='#add8e6', 
+                                        marker_pattern_shape="/" 
+                                    ))
 
-                            fig.update_layout(title='業績推移と来期予想 (単位: 百万ドル)', barmode='group', height=300)
-                            fig.update_xaxes(type='category')
-                            
-                            st.plotly_chart(fig, use_container_width=True)
-                        except Exception as e:
-                            st.write("グラフ化に失敗しました。")
-                    else:
-                        st.write("業績データなし")
-                
-                # --- ★追加：Bloomberg風 競合他社比較エリア ---
-                st.write("---")
-                st.markdown("#### 📊 競合他社（ピア）比較分析")
-                
-                # 同じ業種（Industry）の銘柄を探して時価総額順に並べる
-                industry = row['Industry']
-                if industry != "Unknown":
-                    peers = df[(df['Industry'] == industry) & (df['Ticker'] != ticker)]
-                    top_peers = peers.sort_values(by='Market Cap', ascending=False).head(4) # ライバル上位4社を抽出
+                                fig.update_layout(title='業績推移と来期予想 (単位: 百万ドル)', barmode='group', height=300)
+                                fig.update_xaxes(type='category')
+                                
+                                st.plotly_chart(fig, use_container_width=True)
+                            except Exception as e:
+                                st.write("グラフ化に失敗しました。")
+                        else:
+                            st.write("業績データなし")
                     
-                    if not top_peers.empty:
-                        # 自分とライバルを合体させる
-                        comp_stocks = pd.concat([pd.DataFrame([row]), top_peers])
+                    st.write("---")
+                    st.markdown("#### 📊 競合他社（ピア）比較分析")
+                    industry = row['Industry']
+                    if industry != "Unknown":
+                        peers = df[(df['Industry'] == industry) & (df['Ticker'] != ticker)]
+                        top_peers = peers.sort_values(by='Market Cap', ascending=False).head(4) 
                         
-                        # 表示用に綺麗に整形
-                        comp_df = comp_stocks[['Ticker', 'Name', 'PER', 'ROE (%)', 'EPS Growth (%)', 'Market Cap']].copy()
-                        comp_df['Market Cap'] = (comp_df['Market Cap'] / 1000000000).apply(lambda x: f"${x:.1f}B")
-                        comp_df['PER'] = comp_df['PER'].apply(lambda x: f"{x:.1f} 倍")
-                        comp_df['ROE (%)'] = comp_df['ROE (%)'].apply(lambda x: f"{x:.1f} %")
-                        comp_df['EPS Growth (%)'] = comp_df['EPS Growth (%)'].apply(lambda x: f"{x:.1f} %")
-                        
-                        # テーブルとして美しく表示
-                        st.dataframe(comp_df, hide_index=True, use_container_width=True)
+                        if not top_まずは、今の長旅が無事にゴールすることを祈っております！結果が本当peers.empty:
+                            comp_stocks = pd.concat([pd.DataFrame([row]), top_peers])
+                            comp_df = comp_stocks[['Ticker', 'Name', 'PER', 'ROE (%)', 'EPS Growth (%)', 'Market Cap']].copy()
+                            comp_df['Market Cap'] = (comp_df['Market Cap'] / 1000000000).apply(lambda x: f"${x:.1f}B")
+                            comp_df['PER'] = comp_df['PER'].apply(lambda x: f"{x:.1f} 倍")
+                            comp_df['ROE (%)'] = comp_df['ROE (%)'].apply(lambda x: f"{x:.1f} %")
+                            comp_df['EPS Growth (%)'] = comp_df['EPS Growth (%)'].apply(lambda x: f"{x:.1f} %")
+                            st.dataframe(comp_df, hide_index=True, use_container_width=True)
+                        else:
+                            st.write("※比較可能な同じ業種のデータがありません。")
                     else:
-                        st.write("※比較可能な同じ業種のデータがありません。")
-                else:
-                    st.write("※業種データが取得できないため比較できません。")
+                        st.write("※業種データが取得できないため比較できません。")
+
+                # --- タブ2：事業内容 ---
+                with tab2:
+                    st.markdown("#### 🏢 企業概要 (Business Summary)")
+                    st.write(row.get('Business Summary', 'データなし'))
+                    st.caption("※データはYahoo Finance (US) より英語で取得されます。必要に応じてブラウザの翻訳機能等をご活用ください。")
+
+                # --- タブ3：最新ニュース ---
+                with tab3:
+                    st.markdown("#### 📰 関連する最新ニュース")
+                    try:
+                        news_list = stock.news
+                        if news_list and len(news_list) > 0:
+                            for n in news_list[:5]: # 最新の5件を表示
+                                title = n.get('title', 'No Title')
+                                link = n.get('link', '#')
+                                publisher = n.get('publisher', 'Unknown')
+                                pub_time = n.get('providerPublishTime', 0)
+                                
+                                # UNIXタイムを日時に変換
+                                date_str = pd.to_datetime(pub_time, unit='s').strftime('%Y-%m-%d %H:%M') if pub_time else "Unknown Date"
+                                
+                                # リンク付きのタイトルと詳細を表示
+                                st.markdown(f"**[{title}]({link})**")
+                                st.caption(f"配信元: {publisher} | 日時: {date_str}")
+                                st.write("---")
+                        else:
+                            st.write("関連する最新ニュースが見つかりませんでした。")
+                    except Exception:
+                        st.write("ニュースの取得に失敗しました。")
 
     else:
         st.write("条件に一致する銘柄がありません。")
-
