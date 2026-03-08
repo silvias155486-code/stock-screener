@@ -4,6 +4,7 @@ import certifi
 import time
 import requests
 from datetime import datetime
+import concurrent.futures # ★追加：爆速化のためのマルチスレッド・エンジン
 
 # --- 日本語パスによる通信エラーを回避する魔法のコード ---
 safe_cert_path = os.path.join(os.getcwd(), "cacert.pem")
@@ -38,8 +39,8 @@ st.sidebar.header("🌐 検索対象の市場")
 market_choice = st.sidebar.radio(
     "対象を選んでください",
     [
-        "S&P 500 (約500社 / 処理時間: 約4分)", 
-        "米国全市場 NASDAQ・NYSE等 (約8000社 / 処理時間: 約1.5時間)"
+        "S&P 500 (約500社 / 処理時間: 約30秒)", 
+        "米国全市場 NASDAQ・NYSE等 (約8000社 / 処理時間: 約10〜15分)"
     ]
 )
 
@@ -59,6 +60,10 @@ max_pbr = st.sidebar.slider("PBRの上限 (倍)", 0.1, 10.0, 5.0, 0.1)
 max_per = st.sidebar.slider("PERの上限 (倍)", 1.0, 100.0, 50.0, 1.0) 
 min_roe = st.sidebar.slider("ROEの下限 (%)", -20.0, 50.0, 0.0, 1.0) 
 min_dividend = st.sidebar.slider("配当利回りの下限 (%)", 0.0, 10.0, 0.0, 0.1)
+
+st.sidebar.write("---")
+st.sidebar.header("表示設定")
+news_count = st.sidebar.slider("ニュース表示件数 (最大10件)", 1, 10, 5, 1)
 
 st.sidebar.write("---")
 st.sidebar.header("並び替え")
@@ -97,7 +102,7 @@ if "S&P 500" in market_choice:
     st.write("※現在は **S&P 500 の全銘柄（約500社）** を対象に検索しています。")
     tickers = get_sp500_tickers()
 else:
-    st.warning("⚠️ **米国全市場（約8,000社）** を対象に検索しています。初回のデータ取得には **約1時間〜1時間半** かかります。PCをスリープさせずにそのままお待ちください☕")
+    st.warning("⚠️ **米国全市場（約8,000社）** を対象に検索しています。10並列処理で全力取得中です！（目安: 約10〜15分）☕")
     tickers = get_all_us_tickers()
 
 def safe_float(val):
@@ -108,66 +113,78 @@ def safe_float(val):
     except Exception:
         return 0.0
 
-@st.cache_data(ttl=3600, show_spinner="米国株のデータを全力で取得中です...（気長にお待ちください☕）")
+# ★★★ 超進化ポイント：1社分のデータを取得する専用の関数を切り出し ★★★
+def process_single_ticker(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info 
+        sector = info.get("sector", "Unknown")
+        industry = info.get("industry", "Unknown")
+        business_summary = info.get("longBusinessSummary", "事業内容のデータがありません。")
+        
+        pbr = safe_float(info.get("priceToBook"))
+        per = safe_float(info.get("trailingPE"))
+        roe = safe_float(info.get("returnOnEquity")) * 100 
+        eps_growth = safe_float(info.get("earningsGrowth")) * 100 
+        market_cap = safe_float(info.get("marketCap"))
+        
+        div_rate = safe_float(info.get("dividendRate"))
+        price = safe_float(info.get("currentPrice") or info.get("previousClose"))
+        
+        dividend_yield = 0.0
+        if div_rate > 0 and price > 0:
+            dividend_yield = (div_rate / price) * 100
+        else:
+            dy = safe_float(info.get("dividendYield"))
+            if dy > 0:
+                dividend_yield = dy * 100 if dy < 0.2 else dy
+
+        if dividend_yield > 20.0:
+            dividend_yield = dividend_yield / 100
+            
+        target_price = safe_float(info.get("targetMeanPrice"))
+        upside = 0.0
+        if price > 0 and target_price > 0:
+            upside = ((target_price / price) - 1) * 100
+            
+        revenue_growth = safe_float(info.get("revenueGrowth"))
+        
+        # サーバーへの負荷軽減のためのごくわずかなお休み
+        time.sleep(0.1)
+        
+        return {
+            "Ticker": ticker,
+            "Name": info.get("shortName", ticker),
+            "Sector": sector,
+            "Industry": industry,
+            "Business Summary": business_summary, 
+            "Market Cap": market_cap, 
+            "PBR": pbr,
+            "PER": per, 
+            "ROE (%)": roe, 
+            "EPS Growth (%)": eps_growth, 
+            "Dividend Yield (%)": dividend_yield,
+            "Current Price": price,
+            "Target Price": target_price,
+            "Upside (%)": upside,
+            "Revenue Growth": revenue_growth
+        }
+    except Exception:
+        return None
+# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+
+@st.cache_data(ttl=3600, show_spinner="マルチスレッド(10並列)で米国株のデータを爆速取得中...🚀")
 def fetch_data(ticker_list):
     data = []
-    for ticker in ticker_list:
-        stock = yf.Ticker(ticker)
-        try:
-            info = stock.info 
-            sector = info.get("sector", "Unknown")
-            industry = info.get("industry", "Unknown")
-            
-            business_summary = info.get("longBusinessSummary", "事業内容のデータがありません。")
-            
-            pbr = safe_float(info.get("priceToBook"))
-            per = safe_float(info.get("trailingPE"))
-            roe = safe_float(info.get("returnOnEquity")) * 100 
-            eps_growth = safe_float(info.get("earningsGrowth")) * 100 
-            market_cap = safe_float(info.get("marketCap"))
-            
-            div_rate = safe_float(info.get("dividendRate"))
-            price = safe_float(info.get("currentPrice") or info.get("previousClose"))
-            
-            dividend_yield = 0.0
-            if div_rate > 0 and price > 0:
-                dividend_yield = (div_rate / price) * 100
-            else:
-                dy = safe_float(info.get("dividendYield"))
-                if dy > 0:
-                    dividend_yield = dy * 100 if dy < 0.2 else dy
-
-            if dividend_yield > 20.0:
-                dividend_yield = dividend_yield / 100
-                
-            target_price = safe_float(info.get("targetMeanPrice"))
-            upside = 0.0
-            if price > 0 and target_price > 0:
-                upside = ((target_price / price) - 1) * 100
-                
-            revenue_growth = safe_float(info.get("revenueGrowth"))
-            
-            data.append({
-                "Ticker": ticker,
-                "Name": info.get("shortName", ticker),
-                "Sector": sector,
-                "Industry": industry,
-                "Business Summary": business_summary, 
-                "Market Cap": market_cap, 
-                "PBR": pbr,
-                "PER": per, 
-                "ROE (%)": roe, 
-                "EPS Growth (%)": eps_growth, 
-                "Dividend Yield (%)": dividend_yield,
-                "Current Price": price,
-                "Target Price": target_price,
-                "Upside (%)": upside,
-                "Revenue Growth": revenue_growth
-            })
-        except Exception:
-            pass
+    # ★★★ マルチスレッド（10並列処理）の実行 ★★★
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # ticker_listの中身を10台のレジに次々と流し込んで処理させる
+        results = executor.map(process_single_ticker, ticker_list)
         
-        time.sleep(0.5)
+    # エラーで弾かれた銘柄（None）を取り除いてリストを完成させる
+    for r in results:
+        if r is not None:
+            data.append(r)
             
     return pd.DataFrame(data)
 
@@ -176,27 +193,28 @@ df = fetch_data(tickers)
 if df.empty:
     st.error("⚠️ データの取得に失敗しました。時間をおいてから左側の「🔄 最新データを再取得」ボタンを押してください。")
 else:
-    cap_limit = 0
-    if min_market_cap == "3億ドル以上 (小型株以上)": cap_limit = 300000000
-    elif min_market_cap == "20億ドル以上 (中型株以上)": cap_limit = 2000000000
-    elif min_market_cap == "100億ドル以上 (大型株のみ)": cap_limit = 10000000000
-    
-    filtered_df = df[
-        (df["Market Cap"] >= cap_limit) &
-        (df["PBR"] > 0) & (df["PBR"] <= max_pbr) & 
-        (df["PER"] > 0) & (df["PER"] <= max_per) & 
-        (df["ROE (%)"] >= min_roe) &
-        (df["Dividend Yield (%)"] >= min_dividend)
-    ]
-    
-    if selected_sector != "すべて":
-        filtered_df = filtered_df[filtered_df["Sector"] == selected_sector]
-
     if search_query:
-        filtered_df = filtered_df[
-            filtered_df["Ticker"].str.contains(search_query, case=False, na=False) |
-            filtered_df["Name"].str.contains(search_query, case=False, na=False)
+        filtered_df = df[
+            df["Ticker"].str.contains(search_query, case=False, na=False) |
+            df["Name"].str.contains(search_query, case=False, na=False)
         ]
+        st.sidebar.success(f"💡 検索モードON: スライダー条件を無視して「{search_query}」を探しています")
+    else:
+        cap_limit = 0
+        if min_market_cap == "3億ドル以上 (小型株以上)": cap_limit = 300000000
+        elif min_market_cap == "20億ドル以上 (中型株以上)": cap_limit = 2000000000
+        elif min_market_cap == "100億ドル以上 (大型株のみ)": cap_limit = 10000000000
+        
+        filtered_df = df[
+            (df["Market Cap"] >= cap_limit) &
+            (df["PBR"] > 0) & (df["PBR"] <= max_pbr) & 
+            (df["PER"] > 0) & (df["PER"] <= max_per) & 
+            (df["ROE (%)"] >= min_roe) &
+            (df["Dividend Yield (%)"] >= min_dividend)
+        ]
+        
+        if selected_sector != "すべて":
+            filtered_df = filtered_df[filtered_df["Sector"] == selected_sector]
 
     if sort_option == "配当利回りが高い順":
         filtered_df = filtered_df.sort_values(by="Dividend Yield (%)", ascending=False)
@@ -213,7 +231,7 @@ else:
     st.sidebar.download_button(
         label="📥 表示中のリストをCSVで保存",
         data=csv,
-        file_name='screener_results_v12.csv',
+        file_name='screener_results_v14.csv',
         mime='text/csv',
     )
 
@@ -226,7 +244,6 @@ else:
                 
                 tab1, tab2, tab3 = st.tabs(["📊 指標・業績・比較", "🏢 事業内容", "📰 最新ニュース"])
                 
-                # --- タブ1：従来の指標と業績グラフ ---
                 with tab1:
                     col1, col2 = st.columns([1, 2])
                     with col1:
@@ -286,7 +303,7 @@ else:
                                 fig.update_xaxes(type='category')
                                 
                                 st.plotly_chart(fig, use_container_width=True)
-                            except Exception as e:
+                            except Exception:
                                 st.write("グラフ化に失敗しました。")
                         else:
                             st.write("業績データなし")
@@ -311,20 +328,17 @@ else:
                     else:
                         st.write("※業種データが取得できないため比較できません。")
 
-                # --- タブ2：事業内容 ---
                 with tab2:
                     st.markdown("#### 🏢 企業概要 (Business Summary)")
                     st.write(row.get('Business Summary', 'データなし'))
                     st.caption("※データはYahoo Finance (US) より英語で取得されます。必要に応じてブラウザの翻訳機能等をご活用ください。")
 
-                # --- タブ3：最新ニュース ---
                 with tab3:
                     st.markdown("#### 📰 関連する最新ニュース")
                     try:
                         news_list = stock.news
                         if news_list and len(news_list) > 0:
-                            for n in news_list[:5]: 
-                                # ★修正ポイント：Yahoo Financeの仕様変更に対応した最新のデータ抽出
+                            for n in news_list[:news_count]: 
                                 content = n.get('content', {})
                                 title = n.get('title') or content.get('title', 'No Title')
                                 
